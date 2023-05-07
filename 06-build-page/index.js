@@ -1,89 +1,99 @@
-const fsPromises = require('fs').promises;
+const fs = require('fs').promises;
 const path = require('path');
 
-const projectDistPath = path.join(__dirname, 'project-dist');
+const srcDir = path.join(__dirname, 'assets');
+const destDir = path.join(__dirname, 'project-dist/assets');
 
-// Create project-dist folder
-fsPromises.mkdir(projectDistPath)
-  .then(() => console.log('project-dist folder created'))
-  .catch((err) => console.error(err));
+const stylesDir = path.join(__dirname, 'styles');
+const distDir = path.join(__dirname, 'project-dist');
+const outFile = path.join(distDir, 'style.css');
 
-// Replace tags in template and create index.html file
-const templatePath = path.join(__dirname, 'template.html');
-const indexPath = path.join(projectDistPath, 'index.html');
+async function copyDir(src, dest) {
+  await fs.mkdir(dest, { recursive: true });
 
-fsPromises.readFile(templatePath, 'utf-8')
-  .then((template) => {
-    // Replace {{header}} with contents of components/header.html
-    return fsPromises.readFile(path.join(__dirname, 'components', 'header.html'), 'utf-8')
-      .then((header) => template.replace(/{{header}}/g, header))
-      .then((template) => {
-        // Replace {{articles}} with contents of components/articles.html
-        return fsPromises.readFile(path.join(__dirname, 'components', 'articles.html'), 'utf-8')
-          .then((articles) => template.replace(/{{articles}}/g, articles))
-          .then((template) => {
-            // Replace {{footer}} with contents of components/footer.html
-            return fsPromises.readFile(path.join(__dirname, 'components', 'footer.html'), 'utf-8')
-              .then((footer) => template.replace(/{{footer}}/g, footer))
-              .then((template) => fsPromises.writeFile(indexPath, template))
-          })
-      })
-  })
-  .then(() => console.log('index.html created'))
-  .catch((err) => console.error(err));
+  const files = await fs.readdir(src);
+  for (const file of files) {
+    const srcPath = path.join(src, file);
+    const destPath = path.join(dest, file);
 
-// Combine styles into style.css file
-const stylesPath = path.join(__dirname, 'styles');
-const stylePath = path.join(projectDistPath, 'style.css');
+    const stats = await fs.stat(srcPath);
+    if (stats.isDirectory()) {
+      await copyDir(srcPath, destPath);
+    } else {
+      await fs.copyFile(srcPath, destPath);
+    }
+  }
+}
 
-fsPromises.readdir(stylesPath)
-  .then((files) => {
-    const promises = files.map((file) => fsPromises.readFile(path.join(stylesPath, file), 'utf-8'));
-    return Promise.all(promises)
-      .then((contents) => contents.join('\n'))
-      .then((combined) => fsPromises.writeFile(stylePath, combined));
-  })
-  .then(() => console.log('style.css created'))
-  .catch((err) => console.error(err));
-
-// Copy assets folder
-const fs = require('fs');
-const { promisify } = require('util');
-
-// Use promisify to convert fs functions into promises
-const readdir = promisify(fs.readdir);
-const stat = promisify(fs.stat);
-const mkdir = promisify(fs.mkdir);
-const copyFile = promisify(fs.copyFile);
-
-async function copyFolder(source, target) {
+async function buildStyles(stylesDir, outFile) {
   try {
-    // Check if source is a directory
-    const sourceStats = await stat(source);
-    if (!sourceStats.isDirectory()) {
-      throw new Error('Source is not a directory');
+    const files = await fs.readdir(stylesDir);
+    const cssFiles = files.filter(file => {
+      return path.extname(file) === '.css';
+    });
+    
+    const fileReadPromises = cssFiles.map(file => {
+      return new Promise((resolve, reject) => {
+        const filePath = path.join(stylesDir, file);
+        fs.readFile(filePath, 'utf8')
+          .then(data => resolve(data))
+          .catch(err => reject(err));
+      });
+    });
+
+    const cssContents = await Promise.all(fileReadPromises);
+    const cssContent = cssContents.join('');
+
+    await fs.writeFile(outFile, cssContent);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function combineComponents() {
+  const templatePath = path.join(__dirname, 'template.html');
+  const distPath = path.join(__dirname, 'project-dist', 'index.html');
+
+  let html = await fs.readFile(templatePath, 'utf-8');
+
+  const regex = /{{(.*?)}}/g;
+  let match;
+  while ((match = regex.exec(html))) {
+    const componentName = match[1].trim();
+    const componentPath = path.join(__dirname, 'components', `${componentName}.html`);
+    const componentHtml = await fs.readFile(componentPath, 'utf-8');
+    html = html.replace(match[0], componentHtml);
+  }
+
+  await fs.writeFile(distPath, html);
+}
+
+async function buildProject() {
+  const projectDist = path.join(__dirname, 'project-dist');
+
+  try {
+    // Check if projectDist exists and remove it if it does
+    const destExists = await fs.stat(projectDist).then(() => true).catch(() => false);
+    if (destExists) {
+      console.log(`Removing ${projectDist}`);
+      await fs.rm(projectDist, { recursive: true });
     }
 
-    // Create target directory if it doesn't exist
-    await mkdir(target, { recursive: true });
+    // Create a new destDir and copy the files
+    await copyDir(srcDir, destDir);
+    console.log('Copy completed successfully!');
 
-    // Read contents of source directory
-    const files = await readdir(source);
+    // Build CSS
+    await buildStyles(stylesDir, outFile);
+    console.log('Style built successfully!');
 
-    // Copy each file to the target directory
-    await Promise.all(files.map(async (file) => {
-      const filePath = `${source}/${file}`;
-      const fileStats = await stat(filePath);
-      if (fileStats.isDirectory()) {
-        // Recursively copy subdirectory
-        await copyFolder(filePath, `${target}/${file}`);
-      } else {
-        // Copy file
-        await copyFile(filePath, `${target}/${file}`);
-      }
-    }));
+    // Build HTML
+    await combineComponents();
+    console.log('HTML built successfully!');
 
-    console.log(`Successfully copied ${source} to ${target}`);
   } catch (err) {
-    console.error(`Error copying`)}
+    console.error('Error copying directory:', err);
+  }
 }
+
+buildProject();
