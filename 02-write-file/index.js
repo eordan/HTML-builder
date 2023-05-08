@@ -21,4 +21,13 @@ fs.open(path.join(__dirname, 'text.txt'), 'w', (err, fd) => {
       });
     }
   });
+
+  // Add a listener for the SIGINT signal
+  process.on('SIGINT', () => {
+    fs.close(fd, (err) => {
+      if (err) throw err;
+      stdout.write('\nHave a good day!\n');
+      process.exit();
+    });
+  });
 });
